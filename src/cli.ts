@@ -85,7 +85,8 @@ async function main() {
     } else {
       logger.info('Reset cancelled.');
     }
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
   // 2. Load and validate configuration
@@ -109,8 +110,9 @@ async function main() {
       logger.info('[DRY-RUN] Skipping live WordPress verifyAuth.');
     }
   } catch (err: any) {
-    logger.error(`WordPress connection failed: ${err.message}`);
-    process.exit(1);
+    logger.error(`WordPress connection failed:\n${err.message}`);
+    process.exitCode = 1;
+    return;
   }
 
   // 4. Font sanity check
@@ -124,7 +126,8 @@ async function main() {
     await telegram.connect();
   } catch (err: any) {
     logger.error(`Telegram connection failed: ${err.message}`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   // 6. Initialize Gemini
@@ -233,13 +236,15 @@ async function main() {
     await telegram.disconnect();
 
     if (counts.failed > 0) {
-      process.exit(2);
+      process.exitCode = 2;
+      return;
     }
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 }
 
 main().catch((err) => {
   logger.error('Fatal CLI execution error:', err);
-  process.exit(1);
+  process.exitCode = 1;
 });

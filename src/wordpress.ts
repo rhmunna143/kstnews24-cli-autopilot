@@ -42,11 +42,15 @@ export interface CreatePostResult {
 export class WordPressClient {
   private baseUrl: string;
   private authHeader: string;
+  private username: string;
+  private appPassword: string;
   private categoriesCache: Map<string, WpCategory> = new Map();
   private tagsCache: Map<string, number> = new Map();
 
   constructor(config: Pick<AppConfig, 'wpUrl' | 'wpUsername' | 'wpAppPassword'>) {
     this.baseUrl = `${config.wpUrl}/wp-json/wp/v2`;
+    this.username = config.wpUsername;
+    this.appPassword = config.wpAppPassword;
     const credentials = Buffer.from(
       `${config.wpUsername}:${config.wpAppPassword}`
     ).toString('base64');
@@ -64,6 +68,15 @@ export class WordPressClient {
     if (!headers.has('Authorization')) {
       headers.set('Authorization', this.authHeader);
     }
+    if (!headers.has('X-Authorization')) {
+      headers.set('X-Authorization', this.authHeader);
+    }
+    if (!headers.has('X-WP-User')) {
+      headers.set('X-WP-User', this.username);
+    }
+    if (!headers.has('X-WP-Password')) {
+      headers.set('X-WP-Password', this.appPassword);
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -76,8 +89,11 @@ export class WordPressClient {
       });
       clearTimeout(timer);
 
-      // Handle 429 and 5xx retries
-      if ((response.status === 429 || response.status >= 500) && retryCount < 3) {
+      // Handle 429 and 5xx retries (except 501 Not Implemented)
+      if (
+        (response.status === 429 || (response.status >= 500 && response.status !== 501)) &&
+        retryCount < 3
+      ) {
         const waitMs = Math.pow(2, retryCount + 1) * 1000;
         logger.warn(
           `WordPress returned HTTP ${response.status} for ${endpoint}. Retrying in ${waitMs}ms (attempt ${retryCount + 1}/3)...`
@@ -108,6 +124,28 @@ export class WordPressClient {
     const res = await this.request('/users/me');
 
     if (res.status === 401 || res.status === 403) {
+      // Check if application passwords are specifically disabled on WordPress (e.g. by Wordfence or LiteSpeed)
+      try {
+        const appPassRes = await this.request('/users/me/application-passwords');
+        if (appPassRes.status === 501) {
+          const body = (await appPassRes.json().catch(() => ({}))) as any;
+          if (body?.code === 'application_passwords_disabled') {
+            throw new Error(
+              `WordPress Application Passwords are DISABLED on this site (HTTP 501: "application_passwords_disabled").\n` +
+              `  → Wordfence: Go to WordPress Admin → Wordfence → Login Security → Settings → uncheck "Disable WordPress application passwords".\n` +
+              `  → LiteSpeed / Hostinger: Ensure your .htaccess includes:\n` +
+              `      RewriteEngine On\n` +
+              `      RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]\n` +
+              `  → Profile: Under Users → Profile, verify that the "Application Passwords" section is visible.`
+            );
+          }
+        }
+      } catch (innerErr: any) {
+        if (innerErr.message.includes('application_passwords_disabled')) {
+          throw innerErr;
+        }
+      }
+
       throw new Error(
         `WordPress authentication failed (HTTP ${res.status}). Verify WP_USERNAME and WP_APP_PASSWORD in .env.`
       );
